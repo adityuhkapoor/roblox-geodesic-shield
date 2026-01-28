@@ -1,7 +1,7 @@
 # Roblox Geodesic Shield System
 
 A fully customizable geodesic dome shield system for Roblox with seamless looking triangles, animated spawn patterns, and an in-game playground UI. 
-Not super optimal if your goal is a detailed looking shield however, there's a pretty clear tradeoff between amount of detail and speed
+Not super optimal if your goal is a detailed looking shield however, as there's a pretty clear tradeoff between amount of detail and speed
 
 ![Shield Demo](assets/shield-demo.gif)
 
