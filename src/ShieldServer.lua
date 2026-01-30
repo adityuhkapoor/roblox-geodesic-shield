@@ -1,349 +1,16 @@
--- ServerScriptService/ShieldServer (Script)
--- GEODESIC SHIELD WITH SPAWN PATTERNS
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
+-- Load modules
+local ShieldModules = script.Parent.ShieldModules
+local ShieldConfig = require(ShieldModules.ShieldConfig)
+local ShieldGeometry = require(ShieldModules.ShieldGeometry)
+local ShieldRenderer = require(ShieldModules.ShieldRenderer)
+local ShieldAnimation = require(ShieldModules.ShieldAnimation)
+local ShieldCombat = require(ShieldModules.ShieldCombat)
+local ShieldEvents = require(ShieldModules.ShieldEvents)
 local ShieldRemote = ReplicatedStorage:WaitForChild("ShieldRemote")
-
-
--------------------------------------------------
--- MATH
--------------------------------------------------
-local PHI = 0.5 + math.sqrt(5) / 2
-
-local function getVertices()
-	local verts = {
-		Vector3.new(-1, PHI, 0), Vector3.new(1, PHI, 0),
-		Vector3.new(-1, -PHI, 0), Vector3.new(1, -PHI, 0),
-		Vector3.new(0, -1, PHI), Vector3.new(0, 1, PHI),
-		Vector3.new(0, -1, -PHI), Vector3.new(0, 1, -PHI),
-		Vector3.new(PHI, 0, -1), Vector3.new(PHI, 0, 1),
-		Vector3.new(-PHI, 0, -1), Vector3.new(-PHI, 0, 1),
-	}
-	for i, v in ipairs(verts) do verts[i] = v.Unit end
-	return verts
-end
-
-local function getFaces()
-	return {
-		{1, 12, 6}, {1, 6, 2}, {1, 2, 8}, {1, 8, 11}, {1, 11, 12},
-		{2, 6, 10}, {6, 12, 5}, {12, 11, 3}, {11, 8, 7}, {8, 2, 9},
-		{4, 10, 5}, {4, 5, 3}, {4, 3, 7}, {4, 7, 9}, {4, 9, 10},
-		{5, 10, 6}, {3, 5, 12}, {7, 3, 11}, {9, 7, 8}, {10, 9, 2},
-	}
-end
-
-local function subdivide(vertices, faces, level)
-	if level == 0 then return vertices, faces end
-
-	local newFaces = {}
-	local midpointCache = {}
-
-	local function getMidpoint(i1, i2)
-		local key = math.min(i1, i2) .. "-" .. math.max(i1, i2)
-		if midpointCache[key] then return midpointCache[key] end
-		local mid = ((vertices[i1] + vertices[i2]) / 2).Unit
-		table.insert(vertices, mid)
-		midpointCache[key] = #vertices
-		return #vertices
-	end
-
-	for _, face in ipairs(faces) do
-		local a, b, c = face[1], face[2], face[3]
-		local ab = getMidpoint(a, b)
-		local bc = getMidpoint(b, c)
-		local ca = getMidpoint(c, a)
-		table.insert(newFaces, {a, ab, ca})
-		table.insert(newFaces, {b, bc, ab})
-		table.insert(newFaces, {c, ca, bc})
-		table.insert(newFaces, {ab, bc, ca})
-	end
-
-	return subdivide(vertices, newFaces, level - 1)
-end
-
-local function getUniqueEdges(faces)
-	local edgeSet = {}
-	local edges = {}
-
-	for _, face in ipairs(faces) do
-		for _, pair in ipairs({{face[1], face[2]}, {face[2], face[3]}, {face[3], face[1]}}) do
-			local key = math.min(pair[1], pair[2]) .. "-" .. math.max(pair[1], pair[2])
-			if not edgeSet[key] then
-				edgeSet[key] = true
-				table.insert(edges, {pair[1], pair[2]})
-			end
-		end
-	end
-
-	return edges
-end
-
--------------------------------------------------
--- SPAWN PATTERN SORTING
--------------------------------------------------
-local function sortFacesByPattern(facesWithCenters, pattern)
-	-- facesWithCenters = { {face = {1,2,3}, center = Vector3}, ... }
-
-	local sorted = {}
-	for _, item in ipairs(facesWithCenters) do
-		table.insert(sorted, item)
-	end
-
-	if pattern == "default" then
-		-- Keep original order
-		return sorted
-
-	elseif pattern == "bottom_to_top" then
-		table.sort(sorted, function(a, b)
-			return a.center.Y < b.center.Y
-		end)
-
-	elseif pattern == "top_to_bottom" then
-		table.sort(sorted, function(a, b)
-			return a.center.Y > b.center.Y
-		end)
-
-	elseif pattern == "left_to_right" then
-		table.sort(sorted, function(a, b)
-			return a.center.X < b.center.X
-		end)
-
-	elseif pattern == "right_to_left" then
-		table.sort(sorted, function(a, b)
-			return a.center.X > b.center.X
-		end)
-
-	elseif pattern == "front_to_back" then
-		table.sort(sorted, function(a, b)
-			return a.center.Z > b.center.Z
-		end)
-
-	elseif pattern == "back_to_front" then
-		table.sort(sorted, function(a, b)
-			return a.center.Z < b.center.Z
-		end)
-
-	elseif pattern == "center_out" then
-		table.sort(sorted, function(a, b)
-			return a.center.Magnitude < b.center.Magnitude
-		end)
-
-	elseif pattern == "outside_in" then
-		table.sort(sorted, function(a, b)
-			return a.center.Magnitude > b.center.Magnitude
-		end)
-
-	elseif pattern == "diagonal_bl_tr" then
-		-- Bottom-left to top-right: sort by (-X + Y)
-		table.sort(sorted, function(a, b)
-			local scoreA = -a.center.X + a.center.Y
-			local scoreB = -b.center.X + b.center.Y
-			return scoreA < scoreB
-		end)
-
-	elseif pattern == "diagonal_tr_bl" then
-		-- Top-right to bottom-left
-		table.sort(sorted, function(a, b)
-			local scoreA = -a.center.X + a.center.Y
-			local scoreB = -b.center.X + b.center.Y
-			return scoreA > scoreB
-		end)
-
-	elseif pattern == "diagonal_br_tl" then
-		-- Bottom-right to top-left: sort by (X + Y)
-		table.sort(sorted, function(a, b)
-			local scoreA = a.center.X + a.center.Y
-			local scoreB = b.center.X + b.center.Y
-			return scoreA < scoreB
-		end)
-
-	elseif pattern == "diagonal_tl_br" then
-		-- Top-left to bottom-right
-		table.sort(sorted, function(a, b)
-			local scoreA = a.center.X + a.center.Y
-			local scoreB = b.center.X + b.center.Y
-			return scoreA > scoreB
-		end)
-
-	elseif pattern == "spiral_cw" then
-		-- Clockwise spiral from top (by angle around Y axis)
-		table.sort(sorted, function(a, b)
-			local angleA = math.atan2(a.center.X, a.center.Z)
-			local angleB = math.atan2(b.center.X, b.center.Z)
-			-- Add Y component for spiral effect
-			local scoreA = angleA + a.center.Y * 0.5
-			local scoreB = angleB + b.center.Y * 0.5
-			return scoreA < scoreB
-		end)
-
-	elseif pattern == "spiral_ccw" then
-		-- Counter-clockwise spiral
-		table.sort(sorted, function(a, b)
-			local angleA = math.atan2(a.center.X, a.center.Z)
-			local angleB = math.atan2(b.center.X, b.center.Z)
-			local scoreA = angleA + a.center.Y * 0.5
-			local scoreB = angleB + b.center.Y * 0.5
-			return scoreA > scoreB
-		end)
-
-	elseif pattern == "ring_top_down" then
-		-- Rings from top to bottom (sorted by Y, then angle)
-		table.sort(sorted, function(a, b)
-			-- Round Y to create "rings"
-			local ringA = math.floor(a.center.Y * 5) / 5
-			local ringB = math.floor(b.center.Y * 5) / 5
-			if ringA ~= ringB then
-				return ringA > ringB -- Top first
-			end
-			-- Within same ring, sort by angle
-			local angleA = math.atan2(a.center.X, a.center.Z)
-			local angleB = math.atan2(b.center.X, b.center.Z)
-			return angleA < angleB
-		end)
-
-	elseif pattern == "ring_bottom_up" then
-		-- Rings from bottom to top
-		table.sort(sorted, function(a, b)
-			local ringA = math.floor(a.center.Y * 5) / 5
-			local ringB = math.floor(b.center.Y * 5) / 5
-			if ringA ~= ringB then
-				return ringA < ringB -- Bottom first
-			end
-			local angleA = math.atan2(a.center.X, a.center.Z)
-			local angleB = math.atan2(b.center.X, b.center.Z)
-			return angleA < angleB
-		end)
-
-	elseif pattern == "random" then
-		-- Shuffle randomly
-		for i = #sorted, 2, -1 do
-			local j = math.random(1, i)
-			sorted[i], sorted[j] = sorted[j], sorted[i]
-		end
-
-	elseif pattern == "wave_horizontal" then
-		-- Wave pattern (sine wave based on X)
-		table.sort(sorted, function(a, b)
-			local waveA = a.center.Y + math.sin(a.center.X * 2) * 0.3
-			local waveB = b.center.Y + math.sin(b.center.X * 2) * 0.3
-			return waveA < waveB
-		end)
-
-	elseif pattern == "checkerboard" then
-		-- Alternating pattern
-		table.sort(sorted, function(a, b)
-			local gridA = math.floor(a.center.X * 3) + math.floor(a.center.Y * 3) * 10
-			local gridB = math.floor(b.center.X * 3) + math.floor(b.center.Y * 3) * 10
-			local checkA = (math.floor(a.center.X * 3) + math.floor(a.center.Y * 3)) % 2
-			local checkB = (math.floor(b.center.X * 3) + math.floor(b.center.Y * 3)) % 2
-			if checkA ~= checkB then
-				return checkA < checkB
-			end
-			return gridA < gridB
-		end)
-	end
-
-	return sorted
-end
-
--------------------------------------------------
--- CREATE TRIANGLE (UnionAsync)
--------------------------------------------------
-local function createTriangle(A, B, C, thickness)
-	local AB, AC, BC = B - A, C - A, C - B
-
-	local XVector = AC:Cross(AB)
-	if XVector.Magnitude < 0.001 then return nil end
-	XVector = XVector.Unit
-
-	local YVector = BC:Cross(XVector).Unit
-	local ZVector = BC.Unit
-
-	local height = math.abs(AB:Dot(YVector))
-	if height < 0.001 then return nil end
-
-	local WedgePart1 = Instance.new("WedgePart")
-	WedgePart1.BottomSurface = Enum.SurfaceType.Smooth
-	WedgePart1.Size = Vector3.new(thickness, height, math.max(0.01, math.abs(AB:Dot(ZVector))))
-	WedgePart1.CFrame = CFrame.fromMatrix((A + B) / 2, XVector, YVector, ZVector)
-	WedgePart1.Anchored = true
-	WedgePart1.CanCollide = false
-
-	local WedgePart2 = Instance.new("WedgePart")
-	WedgePart2.BottomSurface = Enum.SurfaceType.Smooth
-	WedgePart2.Size = Vector3.new(thickness, height, math.max(0.01, math.abs(AC:Dot(ZVector))))
-	WedgePart2.CFrame = CFrame.fromMatrix((A + C) / 2, -XVector, YVector, -ZVector)
-	WedgePart2.Anchored = true
-	WedgePart2.CanCollide = false
-
-	WedgePart1.Parent = workspace
-	WedgePart2.Parent = workspace
-
-	local success, triangle = pcall(function()
-		return WedgePart1:UnionAsync({WedgePart2})
-	end)
-
-	WedgePart1:Destroy()
-	WedgePart2:Destroy()
-
-	if success and triangle then
-		triangle.Anchored = true
-		triangle.CanCollide = false
-		triangle.CastShadow = false
-		triangle.UsePartColor = true
-		return triangle
-	end
-
-	return nil
-end
-
--------------------------------------------------
--- FILTER FACES BY SHAPE TYPE
--------------------------------------------------
-local function filterFaces(faces, vertices, shapeType, cutoffY)
-	local filtered = {}
-
-	for _, face in ipairs(faces) do
-		local v1, v2, v3 = vertices[face[1]], vertices[face[2]], vertices[face[3]]
-		local center = (v1 + v2 + v3) / 3
-		local maxY = math.max(v1.Y, v2.Y, v3.Y)
-		local minY = math.min(v1.Y, v2.Y, v3.Y)
-
-		local include = false
-
-		if shapeType == "full" then
-			include = true
-		elseif shapeType == "dome_top" then
-			include = maxY >= cutoffY
-		elseif shapeType == "dome_bottom" then
-			include = minY <= -cutoffY
-		elseif shapeType == "front" then
-			include = center.Z >= cutoffY
-		elseif shapeType == "back" then
-			include = center.Z <= -cutoffY
-		elseif shapeType == "left" then
-			include = center.X <= -cutoffY
-		elseif shapeType == "right" then
-			include = center.X >= cutoffY
-		elseif shapeType == "quarter_front_top" then
-			include = maxY >= cutoffY and center.Z >= 0
-		elseif shapeType == "band" then
-			include = math.abs(center.Y) <= (1 - cutoffY)
-		elseif shapeType == "cap" then
-			include = minY >= cutoffY
-		else
-			include = maxY >= cutoffY
-		end
-
-		if include then
-			table.insert(filtered, face)
-		end
-	end
-
-	return filtered
-end
 
 -------------------------------------------------
 -- PLAYER SHIELDS
@@ -354,7 +21,7 @@ local playerShields = {}
 -- CREATE SHIELD
 -------------------------------------------------
 local function createShield(player, config)
-	-- Destroy old
+	-- Destroy old shield
 	if playerShields[player] then
 		if playerShields[player].model then
 			playerShields[player].model:Destroy()
@@ -370,102 +37,244 @@ local function createShield(player, config)
 	local rootPart = character:FindFirstChild("HumanoidRootPart")
 	if not rootPart then return end
 
-	-- Config values
-	local radius = config.radius or 10
-	local subdivisionLevel = math.clamp(config.subdivisionLevel or 1, 0, 3)
-	local shapeType = config.shapeType or "dome_top"
-	local cutoffY = config.cutoffY or 0
-	local thickness = config.triangleThickness or 0.1
-	local triangleColor = Color3.fromRGB(config.triangleR or 80, config.triangleG or 150, config.triangleB or 220)
-	local edgeColor = Color3.fromRGB(config.edgeR or 100, config.edgeG or 200, config.edgeB or 255)
-	local triangleTransparency = config.triangleTransparency or 0.5
-	local edgeTransparency = config.edgeTransparency or 0.1
-	local edgeThickness = config.edgeThickness or 0.1
-	local vertexSize = config.vertexSize or 0.25
-	local showTriangles = config.showTriangles ~= 0
-	local showEdges = config.showEdges ~= 0
-	local showVertices = config.showVertices ~= 0
-	local material = config.glowMaterial and Enum.Material.Neon or Enum.Material.Glass
+	-- Apply defaults and validate
+	for key, value in pairs(ShieldConfig.Defaults) do
+		if config[key] == nil then
+			config[key] = value
+		end
+	end
+	config = ShieldConfig.validate(config)
 
-	-- Spawn pattern settings
-	local spawnPattern = config.spawnPattern or "default"
-	local spawnDelay = config.spawnDelay or 0
-	local spawnBatch = math.max(1, config.spawnBatch or 5)
+	-- Extract config values
+	local baseShape = config.baseShape
+	local radius = config.radius
+	local subdivisionLevel = config.subdivisionLevel
+	local shapeType = config.shapeType
+	local cutoffY = config.cutoffY
+	local thickness = config.triangleThickness
+	local triangleColor = Color3.fromRGB(config.triangleR, config.triangleG, config.triangleB)
+	local edgeColor = Color3.fromRGB(config.edgeR, config.edgeG, config.edgeB)
+	local triangleTransparency = config.triangleTransparency
+	local edgeTransparency = config.edgeTransparency
+	local edgeThickness = config.edgeThickness
+	local vertexSize = config.vertexSize
+	local showTriangles = config.showTriangles == 1
+	local showEdges = config.showEdges == 1
+	local showVertices = config.showVertices == 1
+	local material = config.glowMaterial == 1 and Enum.Material.Neon or Enum.Material.Glass
+	local spawnPattern = config.spawnPattern
+	local spawnDelay = config.spawnDelay
+	local spawnBatch = config.spawnBatch
+	local spawnAnim = config.spawnAnim
+	local offsetY = config.offsetY
+	local offsetZ = config.offsetZ
 
-	-- Position offset
-	local offsetY = config.offsetY or 1
-	local offsetZ = config.offsetZ or 0
-	local centerPos = rootPart.Position + Vector3.new(0, offsetY, offsetZ)
+	-- Animation settings
+	local useBreathing = config.breathing == 1
+	local breathingIntensity = config.breathingIntensity
+	local useMomentumLag = config.momentumLag == 1
+	local useVelocityTilt = config.velocityTilt == 1
+	local useShimmer = config.shimmer == 1
+	local shimmerIntensity = config.shimmerIntensity
+	local useEnergyWave = config.energyWave == 1
+	local useEdgeGlow = config.edgeGlow == 1
+	local useCoreGlowSync = config.coreGlowSync == 1
+	local useTestMode = config.testMode == 1
 
-	-- Generate geometry
-	local vertices = getVertices()
-	local faces = getFaces()
-	vertices, faces = subdivide(vertices, faces, subdivisionLevel)
+	-- Combat settings
+	local useHitRipple = config.hitRipple == 1
+	local useBreakAnim = config.breakAnim == 1
 
-	-- Filter by shape
-	local filteredFaces = filterFaces(faces, vertices, shapeType, cutoffY)
+	-- Capture initial Y rotation to convert world -> local
+	local _, initialYRotation, _ = rootPart.CFrame:ToEulerAnglesYXZ()
+	local inverseInitialRotation = CFrame.Angles(0, -initialYRotation + math.pi, 0)
 
-	-- Calculate centers and prepare for sorting
+	-- Calculate spawn center (in front of player)
+	local centerPos = rootPart.Position + Vector3.new(0, offsetY, 0) + rootPart.CFrame.LookVector * offsetZ
+	local fixedCenter = rootPart.Position + Vector3.new(0, offsetY, 0) + rootPart.CFrame.LookVector * 15
+
+	-- Generate geometry (unrotated - on unit sphere)
+	local vertices, faces = ShieldGeometry.getBaseGeometry(baseShape)
+	vertices, faces = ShieldGeometry.subdivide(vertices, faces, subdivisionLevel)
+	local filteredFaces = ShieldGeometry.filterFaces(faces, vertices, shapeType, cutoffY)
+
+	-- Build face centers for sorting
 	local facesWithCenters = {}
 	for _, face in ipairs(filteredFaces) do
 		local v1, v2, v3 = vertices[face[1]], vertices[face[2]], vertices[face[3]]
-		local center = (v1 + v2 + v3) / 3 -- Unit sphere center
-		table.insert(facesWithCenters, {
-			face = face,
-			center = center,
-		})
+		table.insert(facesWithCenters, { face = face, center = (v1 + v2 + v3) / 3 })
 	end
 
-	-- Sort by spawn pattern
-	local sortedFaces = sortFacesByPattern(facesWithCenters, spawnPattern)
+	local sortedFaces = ShieldGeometry.sortFacesByPattern(facesWithCenters, spawnPattern, config.diagonalStrength)
 
-	-- Get edges from sorted faces (for consistent edge creation)
+	-- Get edges and vertices
 	local sortedFaceList = {}
 	for _, item in ipairs(sortedFaces) do
 		table.insert(sortedFaceList, item.face)
 	end
-	local edges = getUniqueEdges(sortedFaceList)
+	local edges = ShieldGeometry.getUniqueEdges(sortedFaceList)
+	local usedVertices = ShieldGeometry.getUsedVertices(edges)
 
-	local usedVertices = {}
-	for _, edge in ipairs(edges) do
-		usedVertices[edge[1]] = true
-		usedVertices[edge[2]] = true
-	end
-
+	-- Create model
 	local model = Instance.new("Model")
 	model.Name = player.Name .. "_Shield"
 	model.Parent = workspace
 
 	local triangleData = {}
-	local totalParts = 0
-
+	local edgeParts = {}
+	local vertexParts = {}
 	local triangleCount = #sortedFaces
+
 	ShieldRemote:FireClient(player, "Progress", "Starting... " .. triangleCount .. " triangles")
 
-	-- Store shield early for position tracking
-	local shieldCenter = centerPos
+	local initialSpawnCenter = useTestMode and fixedCenter or centerPos
+	local shieldCenter = initialSpawnCenter
+	local smoothCenter = centerPos
+	local lastRootPos = rootPart.Position
+	local playerVelocity = Vector3.new(0, 0, 0)
+
+	-- Store shield data
 	playerShields[player] = {
 		model = model,
 		triangles = triangleData,
+		edges = edgeParts,
+		vertices = vertexParts,
 		connection = nil,
 		config = config,
+		radius = radius,
+		ready = false,
+		lastWaveTime = 0,
 	}
 
-	-- Follow player connection
-	local connection = RunService.Heartbeat:Connect(function()
+	-- Animation loop
+	local breathTime = 0
+	local connection = RunService.Heartbeat:Connect(function(dt)
 		if not model.Parent or not rootPart.Parent then return end
 
-		local newCenter = rootPart.Position + Vector3.new(0, offsetY, offsetZ)
-		local offset = newCenter - shieldCenter
+		breathTime = breathTime + dt
 
-		for _, part in ipairs(model:GetDescendants()) do
-			if part:IsA("BasePart") then
-				part.CFrame = part.CFrame + offset
+		-- Calculate velocity
+		local currentVel = (rootPart.Position - lastRootPos) / math.max(dt, 0.001)
+		lastRootPos = rootPart.Position
+		playerVelocity = playerVelocity:Lerp(currentVel, 0.2)
+
+		-- Target center (in front of player)
+		local targetCenter
+		if useTestMode then
+			targetCenter = fixedCenter
+		else
+			targetCenter = rootPart.Position + Vector3.new(0, offsetY, 0) + rootPart.CFrame.LookVector * offsetZ
+		end
+
+		-- Momentum lag
+		if useMomentumLag then
+			smoothCenter = ShieldAnimation.applyMomentumLag(smoothCenter, targetCenter, 0.12)
+		else
+			smoothCenter = targetCenter
+		end
+
+		-- Velocity tilt
+		local tiltOffset = Vector3.new(0, 0, 0)
+		if useVelocityTilt then
+			tiltOffset = ShieldAnimation.getVelocityTilt(playerVelocity, 1.5)
+		end
+
+		local newCenter = smoothCenter + tiltOffset
+
+		-- Get player's CURRENT Y rotation (this is all we need!)
+		local _, currentYRotation, _ = rootPart.CFrame:ToEulerAnglesYXZ()
+		local currentRotation = CFrame.Angles(0, currentYRotation + math.pi, 0)
+
+		-- Breathing
+		local breathScale = ShieldAnimation.getBreathScale(breathTime, breathingIntensity, useBreathing and playerShields[player].ready)
+
+		-- Energy wave
+		local waveProgress = -1
+		if useEnergyWave and playerShields[player].ready then
+			waveProgress = ShieldAnimation.updateEnergyWave(playerShields[player], breathTime)
+		end
+
+		-- Update triangles
+		for _, tri in ipairs(triangleData) do
+			if tri.part and tri.part.Parent then
+				-- localOffset is in "shield space" where +Z = forward
+				-- Rotate by player's current Y rotation to get world offset
+				local rotatedOffset = currentRotation:VectorToWorldSpace(tri.localOffset)
+				local scaledOffset = rotatedOffset * breathScale
+				local newPos = newCenter + scaledOffset
+
+				-- Apply position and rotation to triangle
+				if tri.localCFrame then
+					tri.part.CFrame = currentRotation * tri.localCFrame + newPos
+				else
+					tri.part.Position = newPos
+				end
+
+				local normalizedHeight = tri.localOffset.Unit.Y
+				local baseTrans = triangleTransparency
+
+				-- Edge glow
+				if useEdgeGlow then
+					baseTrans = ShieldAnimation.getEdgeGlowOffset(normalizedHeight, triangleTransparency)
+				end
+
+				-- Shimmer
+				local shimmerOffset = 0
+				if useShimmer and playerShields[player].ready then
+					shimmerOffset = ShieldAnimation.getShimmerOffset(breathTime, tri.index, shimmerIntensity, true)
+				end
+
+				-- Energy wave
+				local waveTransOffset, waveColorLerp = ShieldAnimation.getWaveEffect(waveProgress, normalizedHeight)
+
+				if waveColorLerp > 0 then
+					if not tri.waveColor then
+						tri.waveColor = tri.part.Color
+					end
+					tri.part.Color = tri.waveColor:Lerp(Color3.new(1, 1, 1), waveColorLerp)
+				else
+					if tri.waveColor then
+						tri.part.Color = tri.waveColor
+					end
+				end
+
+				if not tri.spawning then
+					tri.part.Transparency = math.clamp(baseTrans + shimmerOffset + waveTransOffset, 0, 0.95)
+				end
 			end
 		end
 
-		for _, tri in ipairs(triangleData) do
-			tri.center = tri.center + offset
+		-- Update edges
+		for _, edgeData in ipairs(edgeParts) do
+			if edgeData.part and edgeData.part.Parent then
+				local rotatedV1 = currentRotation:VectorToWorldSpace(edgeData.localV1)
+				local rotatedV2 = currentRotation:VectorToWorldSpace(edgeData.localV2)
+				local p1 = newCenter + rotatedV1 * radius * breathScale
+				local p2 = newCenter + rotatedV2 * radius * breathScale
+				edgeData.part.Size = Vector3.new(edgeThickness, edgeThickness, (p2 - p1).Magnitude)
+				edgeData.part.CFrame = CFrame.lookAt((p1 + p2) / 2, p2)
+			end
+		end
+
+		-- Update vertices
+		for _, vertData in ipairs(vertexParts) do
+			if vertData.part and vertData.part.Parent then
+				local rotatedPos = currentRotation:VectorToWorldSpace(vertData.localPos)
+				vertData.part.Position = newCenter + rotatedPos * radius * breathScale
+			end
+		end
+
+		-- Update core
+		local core = model:FindFirstChild("Core")
+		if core then
+			core.Position = newCenter
+
+			if useCoreGlowSync and playerShields[player].ready then
+				local light = core:FindFirstChildOfClass("PointLight")
+				if light then
+					ShieldAnimation.updateCoreGlow(light, breathTime, config.lightBrightness, config.lightRange)
+				end
+			end
 		end
 
 		shieldCenter = newCenter
@@ -473,128 +282,133 @@ local function createShield(player, config)
 
 	playerShields[player].connection = connection
 
-	-- Create triangles with spawn pattern
+	-- Spawn triangles
 	task.spawn(function()
 		if showTriangles then
 			local batchCount = 0
-
 			for i, item in ipairs(sortedFaces) do
-				-- Check if shield still exists
-				if not playerShields[player] or not model.Parent then
-					return
-				end
+				if not playerShields[player] or not model.Parent then return end
 
 				local face = item.face
 				local v1, v2, v3 = vertices[face[1]], vertices[face[2]], vertices[face[3]]
-				local p1 = shieldCenter + v1 * radius
-				local p2 = shieldCenter + v2 * radius
-				local p3 = shieldCenter + v3 * radius
 
-				local triangle = createTriangle(p1, p2, p3, thickness)
+				-- Create triangle at world positions (using initial rotation)
+				local initialRotation = CFrame.Angles(0, initialYRotation + math.pi, 0)
+				local p1 = initialSpawnCenter + initialRotation:VectorToWorldSpace(v1 * radius)
+				local p2 = initialSpawnCenter + initialRotation:VectorToWorldSpace(v2 * radius)
+				local p3 = initialSpawnCenter + initialRotation:VectorToWorldSpace(v3 * radius)
 
+				local triangle = ShieldRenderer.createTriangle(p1, p2, p3, thickness)
 				if triangle then
 					triangle.Name = "Tri_" .. i
 					triangle.Color = triangleColor
 					triangle.Material = material
-					triangle.Transparency = triangleTransparency
 					triangle:SetAttribute("TriangleIndex", i)
 					triangle:SetAttribute("IsShieldTriangle", true)
 					triangle:SetAttribute("HP", 100)
 					triangle.Parent = model
-					totalParts = totalParts + 1
 
-					table.insert(triangleData, {
+					-- Convert world offset to LOCAL offset (shield space where +Z = forward)
+					local worldOffset = triangle.Position - initialSpawnCenter
+					local localOffset = inverseInitialRotation:VectorToWorldSpace(worldOffset)
+
+					-- Convert world orientation to LOCAL orientation
+					local worldCFrame = triangle.CFrame - triangle.CFrame.Position
+					local localCFrame = inverseInitialRotation * worldCFrame
+
+					local triData = {
 						index = i,
 						part = triangle,
-						center = (p1 + p2 + p3) / 3,
+						localOffset = localOffset,
+						localCFrame = localCFrame,
 						hp = 100,
 						originalColor = triangleColor,
-					})
+						spawning = true,
+					}
+
+					table.insert(triangleData, triData)
+
+					ShieldRenderer.applySpawnAnimation(triangle, spawnAnim, triangleTransparency, triData)
 				end
 
 				batchCount = batchCount + 1
-
-				-- Apply spawn delay
-				if spawnDelay > 0 and batchCount >= spawnBatch then
+				if batchCount >= spawnBatch then
 					batchCount = 0
-					task.wait(spawnDelay)
-				elseif batchCount >= 5 then
-					batchCount = 0
-					task.wait() -- Minimum yield to prevent freezing
+					if spawnDelay > 0 then
+						task.wait(spawnDelay)
+					else
+						task.wait()
+					end
 				end
 
-				-- Progress update
 				if i % 15 == 0 then
 					ShieldRemote:FireClient(player, "Progress", string.format("%s: %d/%d", spawnPattern, i, triangleCount))
 				end
 			end
 		end
 
-		-- Create edges
+		-- Create edges (store in local space)
 		if showEdges then
 			for _, edge in ipairs(edges) do
-				local v1, v2 = vertices[edge[1]], vertices[edge[2]]
-				local p1 = shieldCenter + v1 * radius
-				local p2 = shieldCenter + v2 * radius
+				local v1Unit, v2Unit = vertices[edge[1]], vertices[edge[2]]
 
-				local part = Instance.new("Part")
-				part.Name = "Edge"
-				part.Size = Vector3.new(edgeThickness, edgeThickness, (p2 - p1).Magnitude)
-				part.CFrame = CFrame.lookAt((p1 + p2) / 2, p2)
-				part.Anchored = true
-				part.CanCollide = false
-				part.CastShadow = false
-				part.Material = Enum.Material.Neon
-				part.Color = edgeColor
-				part.Transparency = edgeTransparency
+				-- v1Unit and v2Unit are already in local space (unit sphere)
+				local localV1 = v1Unit
+				local localV2 = v2Unit
+
+				-- Create at initial world position
+				local initialRotation = CFrame.Angles(0, initialYRotation, 0)
+				local p1 = shieldCenter + initialRotation:VectorToWorldSpace(v1Unit * radius)
+				local p2 = shieldCenter + initialRotation:VectorToWorldSpace(v2Unit * radius)
+
+				local part = ShieldRenderer.createEdge(p1, p2, edgeThickness, edgeColor, edgeTransparency)
 				part.Parent = model
-				totalParts = totalParts + 1
+
+				table.insert(edgeParts, {
+					part = part,
+					localV1 = localV1,
+					localV2 = localV2,
+				})
 			end
 		end
 
-		-- Create vertices
+		-- Create vertices (store in local space)
 		if showVertices then
 			for idx in pairs(usedVertices) do
-				local pos = shieldCenter + vertices[idx] * radius
-				local part = Instance.new("Part")
-				part.Name = "Vertex"
-				part.Shape = Enum.PartType.Ball
-				part.Size = Vector3.new(vertexSize, vertexSize, vertexSize)
-				part.Position = pos
-				part.Anchored = true
-				part.CanCollide = false
-				part.CastShadow = false
-				part.Material = Enum.Material.Neon
-				part.Color = edgeColor
-				part.Transparency = edgeTransparency
+				local unitPos = vertices[idx]
+
+				-- unitPos is already in local space
+				local localPos = unitPos
+
+				-- Create at initial world position
+				local initialRotation = CFrame.Angles(0, initialYRotation, 0)
+				local pos = shieldCenter + initialRotation:VectorToWorldSpace(unitPos * radius)
+
+				local part = ShieldRenderer.createVertex(pos, vertexSize, edgeColor, edgeTransparency)
 				part.Parent = model
-				totalParts = totalParts + 1
+
+				table.insert(vertexParts, {
+					part = part,
+					localPos = localPos,
+				})
 			end
 		end
 
-		-- Core light
-		local core = Instance.new("Part")
-		core.Name = "Core"
-		core.Shape = Enum.PartType.Ball
-		core.Size = Vector3.new(0.5, 0.5, 0.5)
-		core.Position = shieldCenter
-		core.Anchored = true
-		core.CanCollide = false
-		core.Transparency = 1
+		-- Create core
+		local core = ShieldRenderer.createCore(shieldCenter, edgeColor, config.lightBrightness, config.lightRange)
 		core.Parent = model
 
-		local light = Instance.new("PointLight")
-		light.Color = edgeColor
-		light.Brightness = config.lightBrightness or 2
-		light.Range = config.lightRange or 25
-		light.Parent = core
+		-- Mark shield as ready
+		playerShields[player].ready = true
 
 		ShieldRemote:FireClient(player, "Created", {
 			triangles = #triangleData,
-			parts = totalParts,
-			shape = shapeType,
-			pattern = spawnPattern,
+			baseShape = baseShape,
+			pattern = spawnPattern
 		})
+
+		ShieldEvents.fireShieldCreated(player, { triangles = #triangleData })
+		ShieldEvents.fireShieldReady(player, #triangleData)
 	end)
 end
 
@@ -603,77 +417,74 @@ end
 -------------------------------------------------
 local function destroyShield(player)
 	if playerShields[player] then
-		if playerShields[player].model then
-			playerShields[player].model:Destroy()
-		end
 		if playerShields[player].connection then
 			playerShields[player].connection:Disconnect()
 		end
+		if playerShields[player].model then
+			playerShields[player].model:Destroy()
+		end
 		playerShields[player] = nil
 		ShieldRemote:FireClient(player, "Destroyed")
+		ShieldEvents.fireShieldDestroyed(player)
 	end
 end
 
 -------------------------------------------------
--- DAMAGE / REPAIR
+-- DAMAGE TRIANGLE
 -------------------------------------------------
 local function damageTriangle(player, index, damage)
-	if not playerShields[player] then return end
+	local shield = playerShields[player]
+	if not shield then return end
 
-	for _, tri in ipairs(playerShields[player].triangles) do
-		if tri.index == index and tri.part and tri.part.Parent then
-			tri.hp = math.max(0, tri.hp - damage)
-			tri.part:SetAttribute("HP", tri.hp)
+	local useHitRipple = shield.config.hitRipple == 1
+	local useBreakAnim = shield.config.breakAnim == 1
 
-			local original = tri.originalColor
-			tri.part.Color = Color3.new(1, 1, 1)
+	local destroyed = ShieldCombat.damageTriangle(shield, index, damage, useHitRipple, useBreakAnim)
 
-			task.delay(0.1, function()
-				if tri.part and tri.part.Parent then
-					local dmgPct = 1 - (tri.hp / 100)
-					tri.part.Color = Color3.new(
-						original.R + (1 - original.R) * dmgPct,
-						original.G * (1 - dmgPct),
-						original.B * (1 - dmgPct)
-					)
-				end
-			end)
-
-			if tri.hp <= 0 then
-				tri.part:Destroy()
+	-- Find triangle to get HP
+	for _, tri in ipairs(shield.triangles) do
+		if tri.index == index then
+			if destroyed then
+				ShieldEvents.fireTriangleDestroyed(player, index)
+			else
+				ShieldEvents.fireTriangleDamaged(player, index, tri.hp)
 			end
-			return
-		end
-	end
-end
-
-local function repairTriangle(player, index, amount)
-	if not playerShields[player] then return end
-
-	for _, tri in ipairs(playerShields[player].triangles) do
-		if tri.index == index and tri.part and tri.part.Parent and tri.hp < 100 then
-			tri.hp = math.min(100, tri.hp + amount)
-			tri.part:SetAttribute("HP", tri.hp)
-
-			tri.part.Color = Color3.fromRGB(100, 255, 100)
-			task.delay(0.2, function()
-				if tri.part and tri.part.Parent then
-					local dmgPct = 1 - (tri.hp / 100)
-					local original = tri.originalColor
-					tri.part.Color = Color3.new(
-						original.R + (1 - original.R) * dmgPct,
-						original.G * (1 - dmgPct),
-						original.B * (1 - dmgPct)
-					)
-				end
-			end)
-			return
+			break
 		end
 	end
 end
 
 -------------------------------------------------
--- HANDLE EVENTS
+-- REPAIR TRIANGLE
+-------------------------------------------------
+local function repairTriangle(player, index, amount)
+	local shield = playerShields[player]
+	if not shield then return end
+
+	local repaired = ShieldCombat.repairTriangle(shield, index, amount)
+
+	if repaired then
+		for _, tri in ipairs(shield.triangles) do
+			if tri.index == index then
+				ShieldEvents.fireTriangleRepaired(player, index, tri.hp)
+				break
+			end
+		end
+	end
+end
+
+-------------------------------------------------
+-- TEST PROJECTILE
+-------------------------------------------------
+local function fireTestProjectile(player)
+	local shield = playerShields[player]
+	if shield then
+		ShieldCombat.fireTestProjectile(player, shield, damageTriangle)
+	end
+end
+
+-------------------------------------------------
+-- EVENTS
 -------------------------------------------------
 ShieldRemote.OnServerEvent:Connect(function(player, action, ...)
 	if action == "Create" then
@@ -684,6 +495,8 @@ ShieldRemote.OnServerEvent:Connect(function(player, action, ...)
 		damageTriangle(player, ...)
 	elseif action == "Repair" then
 		repairTriangle(player, ...)
+	elseif action == "TestProjectile" then
+		fireTestProjectile(player)
 	end
 end)
 
