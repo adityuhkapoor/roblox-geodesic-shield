@@ -43,7 +43,7 @@ game
         └── ShieldClient (LocalScript)
 ```
 
-## 🎮 Controls
+## Controls
 
 | Key | Action |
 |-----|--------|
@@ -56,7 +56,7 @@ game
 | `T` | Damage hovered triangle |
 | `Y` | Heal hovered triangle |
 
-## 🎯 Shape Types
+## Shape Types
 
 | Shape | Description |
 |-------|-------------|
@@ -70,7 +70,7 @@ game
 | `band` | Horizontal ring |
 | `cap` | Top cap only |
 
-## 🎬 Spawn Patterns
+## Spawn Patterns
 
 - **Directional:** `bottom_to_top`, `top_to_bottom`, `left_to_right`, `right_to_left`, `front_to_back`, `back_to_front`
 - **Radial:** `center_out`, `outside_in`
@@ -79,7 +79,7 @@ game
 - **Ring:** `ring_top_down`, `ring_bottom_up`
 - **Special:** `wave_horizontal`, `checkerboard`, `random`
 
-## ⚙️ Configuration Options
+## Configuration Options
 
 ### Size & Shape
 - `radius` (3-25): Shield size
@@ -123,7 +123,7 @@ Each triangle is created using two WedgeParts that are merged with `UnionAsync()
 ### Golden Ratio
 The icosahedron vertices use the golden ratio (φ = 1.618...) for mathematically perfect proportions.
 
-## 📄 License
+## License
 
 MIT License - Feel free to use in your games!
 
